@@ -15,11 +15,11 @@ namespace FofuxoAnimationTools.Editor
     /// </summary>
     [CustomEditor(typeof(AnimationClip))]
     [CanEditMultipleObjects]
-    public sealed class AnimationClipRootMotionInspector : Editor
+    public sealed class AnimationClipRootMotionInspector : UnityEditor.Editor
     {
         private const string RootBonePrefKey = "Fofuxo.RootMotion.RootBone";
 
-        private Editor builtInEditor;
+        private UnityEditor.Editor builtInEditor;
         private string rootBone;
 
         private void OnEnable()

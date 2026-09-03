@@ -25,6 +25,8 @@ namespace FofuxoAnimationTools.Editor
     /// </summary>
     public static class ModelSourceLink
     {
+        private const string MetadataMarker = "\n[FofuxoSource]\n";
+
         [Serializable]
         private sealed class Link
         {
@@ -34,7 +36,11 @@ namespace FofuxoAnimationTools.Editor
         /// <summary>The external file this asset was last updated from, or empty.</summary>
         public static string SourceOf(string assetPath)
         {
-            AssetImporter importer = AssetImporter.GetAtPath(assetPath);
+            return SourceOf(AssetImporter.GetAtPath(assetPath));
+        }
+
+        public static string SourceOf(AssetImporter importer)
+        {
 
             if (importer == null || string.IsNullOrEmpty(importer.userData))
             {
@@ -43,7 +49,10 @@ namespace FofuxoAnimationTools.Editor
 
             try
             {
-                Link link = JsonUtility.FromJson<Link>(importer.userData);
+                string data = importer.userData;
+                int marker = data.LastIndexOf(MetadataMarker, StringComparison.Ordinal);
+                if (marker >= 0) data = data.Substring(marker + MetadataMarker.Length);
+                Link link = JsonUtility.FromJson<Link>(data);
                 return link?.fofuxoSource ?? string.Empty;
             }
             catch (ArgumentException)
@@ -63,8 +72,76 @@ namespace FofuxoAnimationTools.Editor
                 return;
             }
 
-            importer.userData = JsonUtility.ToJson(new Link { fofuxoSource = sourceFile });
+            sourceFile = Path.GetFullPath(sourceFile);
+            if (SourceOf(importer) == sourceFile) return;
+
+            string data = importer.userData ?? string.Empty;
+            int marker = data.LastIndexOf(MetadataMarker, StringComparison.Ordinal);
+            if (marker >= 0) data = data.Substring(0, marker);
+
+            importer.userData = WithSource(data, sourceFile);
             importer.SaveAndReimport();
+        }
+
+        internal static void RememberDuringImport(AssetImporter importer, string sourceFile)
+        {
+            importer.userData = WithSource(importer.userData ?? string.Empty, Path.GetFullPath(sourceFile));
+        }
+
+        private static string WithSource(string data, string source)
+        {
+            string json = JsonUtility.ToJson(new Link { fofuxoSource = source });
+            if (string.IsNullOrWhiteSpace(data)) return json;
+
+            // Preserve other JSON fields, including nested values, without depending
+            // on a third-party JSON package. Only edit our top-level string property.
+            string trimmed = data.Trim();
+            if (trimmed.StartsWith("{", StringComparison.Ordinal) && trimmed.EndsWith("}", StringComparison.Ordinal))
+            {
+                int depth = 0;
+                for (int i = 0; i < data.Length; i++)
+                {
+                    char character = data[i];
+                    if (character == '{' || character == '[') depth++;
+                    else if (character == '}' || character == ']') depth--;
+                    else if (character == '"')
+                    {
+                        int end = StringEnd(data, i);
+                        if (depth == 1 && data.Substring(i, end - i + 1) == "\"fofuxoSource\"")
+                        {
+                            int value = end + 1;
+                            while (value < data.Length && char.IsWhiteSpace(data[value])) value++;
+                            if (value < data.Length && data[value] == ':')
+                            {
+                                value++;
+                                while (value < data.Length && char.IsWhiteSpace(data[value])) value++;
+                                if (value < data.Length && data[value] == '"')
+                                {
+                                    string encoded = json.Substring(json.IndexOf(':') + 1).TrimEnd('}');
+                                    return data.Substring(0, value) + encoded + data.Substring(StringEnd(data, value) + 1);
+                                }
+                            }
+                        }
+                        i = end;
+                    }
+                }
+                int closing = data.LastIndexOf('}');
+                string separator = trimmed.Substring(1, trimmed.Length - 2).Trim().Length == 0 ? "" : ",";
+                return data.Substring(0, closing) + separator + json.Substring(1, json.Length - 2) + data.Substring(closing);
+            }
+
+            // Non-JSON userData remains available verbatim before our own suffix.
+            return data + MetadataMarker + json;
+        }
+
+        private static int StringEnd(string data, int start)
+        {
+            for (int i = start + 1; i < data.Length; i++)
+            {
+                if (data[i] == '\\') i++;
+                else if (data[i] == '"') return i;
+            }
+            return data.Length - 1;
         }
 
         /// <summary>
@@ -96,34 +173,52 @@ namespace FofuxoAnimationTools.Editor
 
             try
             {
-                File.Copy(source, assetPath, true);
+                string destination = Path.GetFullPath(assetPath);
+                if (string.Equals(Path.GetFullPath(source), destination,
+                        Application.platform == RuntimePlatform.WindowsEditor
+                            ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+                {
+                    return "the source points to the project copy; choose the original external file";
+                }
+                File.Copy(source, destination, true);
+                AssetDatabase.ImportAsset(assetPath,
+                    ImportAssetOptions.ForceUpdate | ImportAssetOptions.ForceSynchronousImport);
             }
-            catch (IOException error)
+            catch (Exception error) when (error is IOException || error is UnauthorizedAccessException)
             {
-                return "could not copy: " + error.Message;
+                return "could not update: " + error.Message;
             }
 
-            AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceUpdate);
             return string.Empty;
         }
 
         /// <summary>
-        /// The models in the selection, with the file each was brought in from. Models
-        /// with nothing remembered come back with an empty string, so a caller can ask
-        /// for one rather than skipping the asset in silence.
+        /// Selected models and other tracked assets, including folder contents.
         /// </summary>
         public static List<KeyValuePair<string, string>> Selected()
         {
             var found = new List<KeyValuePair<string, string>>();
+            var seen = new HashSet<string>(StringComparer.Ordinal);
 
             foreach (UnityEngine.Object selected in
                      Selection.GetFiltered(typeof(UnityEngine.Object), SelectionMode.Assets))
             {
                 string path = AssetDatabase.GetAssetPath(selected);
 
-                foreach (string model in ModelAsset.Under(path))
+                var paths = new List<string>();
+                if (AssetDatabase.IsValidFolder(path))
                 {
-                    found.Add(new KeyValuePair<string, string>(model, SourceOf(model)));
+                    foreach (string guid in AssetDatabase.FindAssets(string.Empty, new[] { path }))
+                        paths.Add(AssetDatabase.GUIDToAssetPath(guid));
+                }
+                else paths.Add(path);
+
+                foreach (string candidate in paths)
+                {
+                    if (!candidate.StartsWith("Assets/", StringComparison.Ordinal) || !seen.Add(candidate)) continue;
+                    string source = SourceOf(candidate);
+                    if (!string.IsNullOrEmpty(source) || ModelAsset.Is(candidate))
+                        found.Add(new KeyValuePair<string, string>(candidate, source));
                 }
             }
 

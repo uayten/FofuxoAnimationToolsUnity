@@ -41,7 +41,6 @@ namespace FofuxoAnimationTools.Editor
 
         public static string SourceOf(AssetImporter importer)
         {
-
             if (importer == null || string.IsNullOrEmpty(importer.userData))
             {
                 return string.Empty;
@@ -75,11 +74,7 @@ namespace FofuxoAnimationTools.Editor
             sourceFile = Path.GetFullPath(sourceFile);
             if (SourceOf(importer) == sourceFile) return;
 
-            string data = importer.userData ?? string.Empty;
-            int marker = data.LastIndexOf(MetadataMarker, StringComparison.Ordinal);
-            if (marker >= 0) data = data.Substring(0, marker);
-
-            importer.userData = WithSource(data, sourceFile);
+            importer.userData = WithSource(importer.userData ?? string.Empty, sourceFile);
             importer.SaveAndReimport();
         }
 
@@ -90,6 +85,8 @@ namespace FofuxoAnimationTools.Editor
 
         private static string WithSource(string data, string source)
         {
+            int marker = data.LastIndexOf(MetadataMarker, StringComparison.Ordinal);
+            if (marker >= 0) data = data.Substring(0, marker);
             string json = JsonUtility.ToJson(new Link { fofuxoSource = source });
             if (string.IsNullOrWhiteSpace(data)) return json;
 

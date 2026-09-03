@@ -19,7 +19,8 @@ public static class SourceImportRegression
         string token = Guid.NewGuid().ToString("N");
         string assets = "Assets/__FofuxoSourceTests_" + token;
         string external = Path.Combine(Path.GetTempPath(), "FofuxoSourceTests_" + token);
-        string pending = SessionState.GetString("Fofuxo.Source.PendingDrops", "");
+        string pendingPath = Path.GetFullPath("Library/FofuxoSourcePending.json");
+        string pending = File.Exists(pendingPath) ? File.ReadAllText(pendingPath) : null;
         var selection = Selection.objects;
         string[] dragPaths = DragAndDrop.paths;
         Directory.CreateDirectory(external);
@@ -58,7 +59,7 @@ public static class SourceImportRegression
 
             var importer = AssetImporter.GetAtPath(moved);
             importer.userData = "{\"owner\":42,\"nested\":{\"fofuxoSource\":\"keep\"},\"text\":\"a}b\"}";
-            AssetDatabase.WriteImportSettingsIfDirty(moved);
+            importer.SaveAndReimport();
             ModelSourceLink.Remember(moved, source);
             string secondSource = Path.Combine(external, "Changed Name.txt");
             File.WriteAllText(secondSource, "renamed source");
@@ -72,7 +73,7 @@ public static class SourceImportRegression
                 "Renamed source updates project copy");
 
             importer.userData = "custom opaque metadata";
-            AssetDatabase.WriteImportSettingsIfDirty(moved);
+            importer.SaveAndReimport();
             ModelSourceLink.Remember(moved, source);
             Check(importer.userData.StartsWith("custom opaque metadata") &&
                 ModelSourceLink.SourceOf(moved) == source, "Opaque metadata retained");
@@ -134,7 +135,8 @@ public static class SourceImportRegression
         {
             Selection.objects = selection;
             DragAndDrop.paths = dragPaths;
-            SessionState.SetString("Fofuxo.Source.PendingDrops", pending);
+            if (pending == null) File.Delete(pendingPath);
+            else File.WriteAllText(pendingPath, pending);
             AssetDatabase.DeleteAsset(assets);
             string expected = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "FofuxoSourceTests_" + token));
             if (Path.GetFullPath(external) == expected && Directory.Exists(external))

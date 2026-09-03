@@ -108,6 +108,7 @@ namespace FofuxoAnimationTools.Editor
 
         internal static string SourceForImport(string assetPath)
         {
+            if (!assetPath.StartsWith("Assets/", StringComparison.Ordinal)) return string.Empty;
             PendingBatch batch = ReadPending();
             PendingFile match = batch.files.Find(file =>
                 string.Equals(file.destination, assetPath, PathComparison));
@@ -147,7 +148,15 @@ namespace FofuxoAnimationTools.Editor
 
         private static PendingBatch ReadPending()
         {
-            string json = File.Exists(PendingPath) ? File.ReadAllText(PendingPath) : string.Empty;
+            string json = string.Empty;
+            if (File.Exists(PendingPath))
+            {
+                // Let the main Editor atomically replace the file while workers read
+                // the previous complete snapshot on Windows.
+                using (var stream = new FileStream(PendingPath, FileMode.Open, FileAccess.Read,
+                           FileShare.ReadWrite | FileShare.Delete))
+                using (var reader = new StreamReader(stream)) json = reader.ReadToEnd();
+            }
             PendingBatch batch = string.IsNullOrEmpty(json) ? new PendingBatch() : JsonUtility.FromJson<PendingBatch>(json);
             batch.files.RemoveAll(file => file.expires < DateTime.UtcNow.Ticks);
             return batch;

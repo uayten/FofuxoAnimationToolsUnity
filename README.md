@@ -7,6 +7,8 @@ With this package installed you can:
 
 - **Reimport four hundred animations** over the clips the project is already
   using, without a single reference breaking.
+- **Remember external import sources** when files or folders are dragged into
+  Project, inspect their paths, and update the project copies from the originals.
 - **Be told what breaks before it breaks**, when you delete an FBX or a clip
   something else is holding on to — and point those references somewhere else
   instead.
@@ -20,6 +22,7 @@ With this package installed you can:
 ## Contents
 
 - [Install](#install)
+- [Source files and updating imports](#source-files-and-updating-imports)
 - [Reimporting a set of animations](#reimporting-a-set-of-animations)
   - [FBX, glb, and anything else](#fbx-glb-and-anything-else)
   - [The rig check](#the-rig-check)
@@ -61,6 +64,41 @@ ssh://git@github.com/uayten/FofuxoAnimationToolsUnity.git
 Pin a version by appending `#v0.1.0`.
 
 Requires Unity 6000.0 or newer.
+
+## Source files and updating imports
+
+Drag external files or folders into Unity's **Project** window. The package records
+the original path for each imported file, including files in nested folders. This
+works with model files, textures, audio and other file types that have an importer.
+The path is saved in the asset's `.meta` file and survives renaming or moving the
+asset inside the project.
+
+Select an asset to see **Source File** in the Inspector. With UnityGLTF, this block
+appears in the **Info** tab; other importers show it below the Inspector header.
+The path is selectable and has **Set Source...**, **Show in Explorer**, and
+**Update From Source** controls. The header is also the fallback if a future
+UnityGLTF version changes its internal Info-tab implementation.
+
+**Update From Source** copies the current external file over the project asset and
+rebuilds its imported contents, preserving the asset GUID and import settings.
+The same command is available under **Assets › Fofuxo's Animation Tools › Update
+From Source File**. A model's imported animations then reflect the current source:
+new takes appear and existing takes are rebuilt. References to takes that were
+removed or renamed in the source depend on the importer's identifier handling.
+
+For assets imported before this feature, the original location cannot be recovered
+from Unity's project copy. The first update opens the source picker directly and
+performs the update immediately after a file is chosen. A warning dialog appears
+when a recorded source file or its folder cannot be found, with an option to locate
+it again. Files copied into Assets outside Unity have no drag event; use **Set
+Source...** to record their location once.
+
+Unity's built-in **Reimport** rebuilds the copy already in the project. To pull a new
+export from its external location, use **Update From Source**. Standalone `.anim`
+files extracted from a model are separate assets: update those through
+[Extract & Sync Clips](#reimporting-a-set-of-animations) after updating the model.
+For formats with external companion files, such as `.gltf` plus `.bin` and
+textures, update those tracked files too, or select their containing folder.
 
 ## Reimporting a set of animations
 

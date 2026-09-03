@@ -7,7 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Choosing a source during **Update From Source File** now also copies and imports
+  it in that action. Previously the picker only saved the link, leaving the old
+  animations in the project until another update was requested.
+- An explicitly selected source can have a different filename from the asset.
+- Source updates finish importing before returning and preserve the asset GUID.
+
 ### Added
+
+- Automatic source-path capture for external files and nested folders dropped into
+  the Project window, including OneDrive folders. Origin metadata is written before
+  import, so parallel import workers do not race a later `.meta` rewrite.
+- A **Source File** Inspector block with the original path, availability, file
+  selection, folder reveal and update actions. UnityGLTF displays it in **Info**.
+- Regression coverage for source capture, metadata preservation, file moves, missing
+  sources and glTF animation addition/replacement in `Tests~/SourceImportRegression.cs`.
 
 - **Compress on write**, on by default in the extract and sync window. Every clip
   written goes through the keyframe reduction on the way out, which is what Unity's

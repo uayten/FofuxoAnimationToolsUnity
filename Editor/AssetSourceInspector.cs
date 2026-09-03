@@ -79,6 +79,7 @@ namespace FofuxoAnimationTools.Editor
         {
             if (!(editor.target is AssetImporter importer)) return;
             string source = ModelSourceLink.SourceOf(importer);
+            bool available = !string.IsNullOrEmpty(source) && File.Exists(source);
             bool multiple = editor.targets.Length > 1;
             using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
             {
@@ -95,9 +96,10 @@ namespace FofuxoAnimationTools.Editor
                 else
                 {
                     Rect rect = EditorGUILayout.GetControlRect(false,
-                        EditorGUIUtility.singleLineHeight * 3);
+                        EditorStyles.wordWrappedLabel.CalcHeight(new GUIContent(source),
+                            Mathf.Max(120, EditorGUIUtility.currentViewWidth - 48)));
                     EditorGUI.SelectableLabel(rect, source, EditorStyles.wordWrappedLabel);
-                    EditorGUILayout.LabelField(File.Exists(source) ? "Available" : "File or folder not found",
+                    EditorGUILayout.LabelField(available ? "Available" : "File or folder not found",
                         EditorStyles.miniLabel);
                 }
 
@@ -106,12 +108,15 @@ namespace FofuxoAnimationTools.Editor
                     string path = importer.assetPath;
                     if (GUILayout.Button("Set Source..."))
                         EditorApplication.delayCall += () => ModelUpdateMenu.ChooseSource(path);
-                    using (new EditorGUI.DisabledScope(string.IsNullOrEmpty(source) || !File.Exists(source)))
+                    using (new EditorGUI.DisabledScope(!available))
                     {
                         if (GUILayout.Button("Show in Explorer")) EditorUtility.RevealInFinder(source);
                     }
-                    if (GUILayout.Button("Update From Source"))
-                        EditorApplication.delayCall += () => ModelUpdateMenu.UpdateAssets(new[] { path });
+                }
+                if (GUILayout.Button("Update From Source"))
+                {
+                    string path = importer.assetPath;
+                    EditorApplication.delayCall += () => ModelUpdateMenu.UpdateAssets(new[] { path });
                 }
             }
         }

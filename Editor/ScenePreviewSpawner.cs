@@ -22,21 +22,21 @@ namespace FofuxoAnimationTools.Editor
         [MenuItem(MenuPath, false, 40)]
         private static void SpawnSelected()
         {
-            GameObject model = PreviewModel();
-            if (model == null)
-            {
-                EditorUtility.DisplayDialog(
-                    "Fofuxo Animation Tools",
-                    "No preview model is set.\n\n" +
-                    "Select an animation clip and use the Root Motion block in the " +
-                    "Inspector to pick the model these clips animate.",
-                    "Ok");
-                return;
-            }
-
             List<AnimationClip> clips = SelectedClips();
             if (clips.Count == 0)
             {
+                return;
+            }
+
+            if (PreviewModel(clips[0]) == null)
+            {
+                EditorUtility.DisplayDialog(
+                    "Fofuxo Animation Tools",
+                    $"No preview model for '{clips[0].name}'.\n\n" +
+                    "No folder from the clip up to Assets holds a rigged model. Set " +
+                    "Preview Model in the Scene Preview block of the Inspector; the " +
+                    "choice is remembered for the whole folder.",
+                    "Ok");
                 return;
             }
 
@@ -45,7 +45,7 @@ namespace FofuxoAnimationTools.Editor
 
             foreach (AnimationClip clip in clips)
             {
-                GameObject instance = Spawn(model, clip, offset);
+                GameObject instance = Spawn(PreviewModel(clip), clip, offset);
                 if (instance == null)
                 {
                     continue;
@@ -129,9 +129,98 @@ namespace FofuxoAnimationTools.Editor
             return instance;
         }
 
-        public static GameObject PreviewModel()
+        /// <summary>
+        /// The model a clip is meant to animate.
+        ///
+        /// One remembered model for the whole project only works while the project has
+        /// one character. On the second, selecting a clip offers the wrong rig, and
+        /// previewing it folds the body into shapes it cannot make — which reads as a
+        /// broken export rather than as the wrong model having been asked.
+        ///
+        /// So the clip's own folder answers first, and answers by itself: walking up
+        /// from where the clip lives, the nearest folder holding a rigged model is the
+        /// character those clips belong to. `Characters/Grant/AnimFiles/x.anim` finds
+        /// `Characters/Grant/Grant.fbx` one level up and stops, without ever reaching
+        /// `Characters/`, where it would have to choose between everybody.
+        ///
+        /// Each level is searched without descending, for the same reason: a recursive
+        /// look from one character's folder reaches the neighbours' as well.
+        /// </summary>
+        public static GameObject PreviewModel(AnimationClip clip = null)
         {
-            string guid = EditorPrefs.GetString(PreviewModelPrefKey, string.Empty);
+            string folder = FolderOf(clip);
+
+            if (!string.IsNullOrEmpty(folder))
+            {
+                GameObject chosen = Load(EditorPrefs.GetString(FolderKey(folder), string.Empty));
+                if (chosen != null)
+                {
+                    return chosen;
+                }
+
+                GameObject nearby = NearestCharacter(folder);
+                if (nearby != null)
+                {
+                    return nearby;
+                }
+            }
+
+            return Load(EditorPrefs.GetString(PreviewModelPrefKey, string.Empty));
+        }
+
+        /// <summary>
+        /// Remembers a model chosen by hand, against the clip's folder rather than the
+        /// clip itself: four hundred clips of one character live in one folder, and
+        /// answering the question once should not have to be done four hundred times.
+        /// </summary>
+        public static void SetPreviewModel(GameObject model, AnimationClip clip = null)
+        {
+            string guid = model == null
+                ? string.Empty
+                : AssetDatabase.AssetPathToGUID(AssetDatabase.GetAssetPath(model));
+
+            string folder = FolderOf(clip);
+
+            if (!string.IsNullOrEmpty(folder))
+            {
+                if (string.IsNullOrEmpty(guid))
+                {
+                    EditorPrefs.DeleteKey(FolderKey(folder));
+                }
+                else
+                {
+                    EditorPrefs.SetString(FolderKey(folder), guid);
+                }
+            }
+
+            // The project-wide value stays as the last resort, for the callers that have
+            // no clip in hand to ask about.
+            if (string.IsNullOrEmpty(guid))
+            {
+                EditorPrefs.DeleteKey(PreviewModelPrefKey);
+            }
+            else
+            {
+                EditorPrefs.SetString(PreviewModelPrefKey, guid);
+            }
+        }
+
+        private static string FolderKey(string folder)
+        {
+            return PreviewModelPrefKey + "." + folder;
+        }
+
+        private static string FolderOf(AnimationClip clip)
+        {
+            string path = clip == null ? null : AssetDatabase.GetAssetPath(clip);
+
+            return string.IsNullOrEmpty(path)
+                ? string.Empty
+                : System.IO.Path.GetDirectoryName(path).Replace('\\', '/');
+        }
+
+        private static GameObject Load(string guid)
+        {
             if (string.IsNullOrEmpty(guid))
             {
                 return null;
@@ -143,16 +232,85 @@ namespace FofuxoAnimationTools.Editor
                 : AssetDatabase.LoadAssetAtPath<GameObject>(path);
         }
 
-        public static void SetPreviewModel(GameObject model)
+        /// <summary>
+        /// Walks up from a folder looking for the character, stopping short of Assets.
+        ///
+        /// A candidate is anything with a skinned mesh — a prefab counts, and is usually
+        /// the better answer, being the extracted character that no longer depends on a
+        /// model file. Files carrying animation are passed over: an animation export
+        /// often ships the mesh alongside the take, so the folder can be full of things
+        /// that look like the character and are really one clip each.
+        ///
+        /// Within a level the biggest rig wins, which is what tells a character apart
+        /// from the sword lying next to it. Only if a level offers nothing but animation
+        /// files does one of those get used, so a folder that has not had its character
+        /// extracted yet still previews.
+        /// </summary>
+        private static GameObject NearestCharacter(string folder)
         {
-            if (model == null)
+            while (!string.IsNullOrEmpty(folder) && folder != "Assets" && folder.StartsWith("Assets"))
             {
-                EditorPrefs.DeleteKey(PreviewModelPrefKey);
-                return;
+                GameObject best = Best(folder, false) ?? Best(folder, true);
+
+                if (best != null)
+                {
+                    return best;
+                }
+
+                folder = System.IO.Path.GetDirectoryName(folder)?.Replace('\\', '/');
             }
 
-            string path = AssetDatabase.GetAssetPath(model);
-            EditorPrefs.SetString(PreviewModelPrefKey, AssetDatabase.AssetPathToGUID(path));
+            return null;
+        }
+
+        private static GameObject Best(string folder, bool allowAnimationFiles)
+        {
+            GameObject best = null;
+            int bones = 0;
+
+            foreach (string guid in AssetDatabase.FindAssets("t:GameObject", new[] { folder }))
+            {
+                string path = AssetDatabase.GUIDToAssetPath(guid);
+
+                if (System.IO.Path.GetDirectoryName(path).Replace('\\', '/') != folder)
+                {
+                    continue;
+                }
+
+                var model = AssetDatabase.LoadAssetAtPath<GameObject>(path);
+
+                if (model == null || model.GetComponentInChildren<SkinnedMeshRenderer>(true) == null)
+                {
+                    continue;
+                }
+
+                if (!allowAnimationFiles && CarriesAnimation(path))
+                {
+                    continue;
+                }
+
+                int count = model.GetComponentsInChildren<Transform>(true).Length;
+                if (count > bones)
+                {
+                    bones = count;
+                    best = model;
+                }
+            }
+
+            return best;
+        }
+
+        private static bool CarriesAnimation(string path)
+        {
+            foreach (Object member in AssetDatabase.LoadAllAssetRepresentationsAtPath(path))
+            {
+                if (member is AnimationClip clip && !clip.name.StartsWith("__preview__"))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private static List<AnimationClip> SelectedClips()

@@ -72,19 +72,23 @@ namespace FofuxoAnimationTools.Editor
             {
                 EditorGUILayout.LabelField("Scene Preview", EditorStyles.boldLabel);
 
-                GameObject model = ScenePreviewSpawner.PreviewModel();
+                GameObject model = ScenePreviewSpawner.PreviewModel(clips[0]);
 
                 using (var check = new EditorGUI.ChangeCheckScope())
                 {
                     var chosen = (GameObject)EditorGUILayout.ObjectField(
-                        new GUIContent("Preview Model", "The rigged model these clips animate."),
+                        new GUIContent(
+                            "Preview Model",
+                            "The rigged model these clips animate. Found on its own from the " +
+                            "nearest folder up that holds a character; set it here and that " +
+                            "choice is remembered for every clip in this folder."),
                         model,
                         typeof(GameObject),
                         false);
 
                     if (check.changed)
                     {
-                        ScenePreviewSpawner.SetPreviewModel(chosen);
+                        ScenePreviewSpawner.SetPreviewModel(chosen, clips[0]);
                         model = chosen;
                     }
                 }

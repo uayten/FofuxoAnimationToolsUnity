@@ -49,30 +49,38 @@ namespace FofuxoAnimationTools.Editor
             DragAndDrop.AcceptDrag();
             current.Use();
 
-            GameObject model = ScenePreviewSpawner.PreviewModel();
-            if (model == null)
+            // Asked per clip: the drop can carry clips of more than one character, and
+            // each of them knows which model its own folder belongs to.
+            foreach (AnimationClip clip in clips)
             {
+                if (ScenePreviewSpawner.PreviewModel(clip) != null)
+                {
+                    continue;
+                }
+
                 EditorUtility.DisplayDialog(
                     "Fofuxo Animation Tools",
-                    "No preview model is set.\n\n" +
-                    "Select an animation clip and use the Scene Preview block in the " +
-                    "Inspector to pick the rigged model these clips animate. After that, " +
-                    "dropping a clip into the scene works.",
+                    $"No preview model for '{clip.name}'.\n\n" +
+                    "No folder from the clip up to Assets holds a rigged model, so there " +
+                    "is nothing to play it on. Select the clip and set Preview Model in " +
+                    "the Scene Preview block of the Inspector; that choice is remembered " +
+                    "for the whole folder.",
                     "Ok");
                 return;
             }
 
-            Spawn(clips, model, DropPoint(current.mousePosition));
+            Spawn(clips, DropPoint(current.mousePosition));
         }
 
-        private static void Spawn(List<AnimationClip> clips, GameObject model, Vector3 where)
+        private static void Spawn(List<AnimationClip> clips, Vector3 where)
         {
             var spawned = new List<Object>(clips.Count);
             float offset = 0f;
 
             foreach (AnimationClip clip in clips)
             {
-                GameObject instance = ScenePreviewSpawner.Spawn(model, clip, 0f);
+                GameObject instance = ScenePreviewSpawner.Spawn(
+                    ScenePreviewSpawner.PreviewModel(clip), clip, 0f);
                 if (instance == null)
                 {
                     continue;

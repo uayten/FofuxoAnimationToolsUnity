@@ -18,6 +18,7 @@ namespace FofuxoAnimationTools.Editor
         private const string RevertPath = "Assets/Animation Clips/Clear Root Motion";
         private const string LoopOnPath = "Assets/Animation Clips/Loop Time/Enable";
         private const string LoopOffPath = "Assets/Animation Clips/Loop Time/Disable";
+        private const string CompressPath = "Assets/Animation Clips/Compress...";
 
         [MenuItem(ConvertPath, false, 0)]
         private static void UseRootMotion()
@@ -65,6 +66,17 @@ namespace FofuxoAnimationTools.Editor
         [MenuItem(LoopOffPath, false, 21)]
         private static void DisableLoop() => SetLoop(false);
 
+        /// <summary>
+        /// Opens the window rather than compressing on the spot. Dropped keys do not come
+        /// back, and how many are dropped depends entirely on the tolerances -- so the
+        /// tolerances, and a run that measures without writing, come before the button.
+        /// </summary>
+        [MenuItem(CompressPath, false, 41)]
+        private static void Compress()
+        {
+            ClipCompressionWindow.Open();
+        }
+
         private static void SetLoop(bool looping)
         {
             int changed = 0;
@@ -84,6 +96,7 @@ namespace FofuxoAnimationTools.Editor
         [MenuItem(RevertPath, true)]
         [MenuItem(LoopOnPath, true)]
         [MenuItem(LoopOffPath, true)]
+        [MenuItem(CompressPath, true)]
         private static bool HasEditableClips()
         {
             return SelectedClips().Count > 0;
@@ -126,7 +139,7 @@ namespace FofuxoAnimationTools.Editor
         /// Standalone .anim assets in the selection. Clips inside a model are left
         /// out: they belong to the importer and any edit would vanish on reimport.
         /// </summary>
-        private static List<AnimationClip> SelectedClips()
+        internal static List<AnimationClip> SelectedClips()
         {
             var clips = new List<AnimationClip>();
 

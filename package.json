@@ -1,9 +1,9 @@
 {
   "name": "com.uayten.fofuxoanimationtools",
-  "displayName": "Fofuxo's Animation Tools",
+  "displayName": "Fofuxo's Animation Tools Unity",
   "version": "0.1.0",
   "unity": "6000.0",
-  "description": "Editor tools for standalone .anim assets. Turn bone displacement into root motion, toggle Loop Time in bulk, and drop a clip into the scene to watch it loop on the character. Built for pipelines that import a model, extract its clips and delete the source file — where Unity's own importer settings no longer reach.",
+  "description": "Editor tools for a pipeline that authors its animations somewhere else and brings them into Unity as standalone .anim assets. Reimport a folder of takes over the clips the project already uses without breaking a reference, be told what breaks before deleting something else depends on, match a new FBX against the materials the project already has, turn bone displacement into root motion, and drop a clip into the Scene view to watch it loop.",
   "author": {
     "name": "uayten"
   },
@@ -12,7 +12,9 @@
     "root motion",
     "animation clip",
     "editor tools",
-    "pipeline"
+    "pipeline",
+    "references",
+    "reimport"
   ],
   "license": "SEE LICENSE IN LICENSE.md",
   "hideInEditor": false

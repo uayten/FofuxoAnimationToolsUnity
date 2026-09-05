@@ -24,11 +24,17 @@ namespace FofuxoAnimationTools.Editor
     /// and a delete the user confirms is passed straight through to Unity as if
     /// nothing had interrupted it.
     ///
-    /// That is the fallback, not the way in. The two ways a person deletes something
-    /// -- the Delete key and the Delete menu entry -- are caught before Unity starts,
-    /// by ProjectWindowDeleteKey and AssetDeleteMenu, where refusing is not needed
-    /// and that dialog never appears. What arrives here is a delete from a script or
-    /// another tool, and stopping one of those is the only option Unity offers.
+    /// That is the fallback, not the way in. The Delete key is caught before Unity
+    /// starts, by ProjectWindowDeleteKey, where refusing is not needed and that
+    /// dialog never appears. What arrives here is a delete from a menu entry, a
+    /// script or another tool, and stopping one of those is the only option Unity
+    /// offers.
+    ///
+    /// The menu entry used to be caught the same distance upstream, by a MenuItem
+    /// on Unity's own Assets/Delete path. Unity 6000.6 no longer lets a managed
+    /// item replace that entry -- registering one only logs "a menu item with the
+    /// same name already exists" and leaves Unity's in place -- so the takeover
+    /// was removed rather than kept as a warning that intercepts nothing.
     ///
     /// Unity calls this once per path, so the answer is worked out for the whole
     /// selection on the first call and remembered for the rest.
@@ -77,15 +83,14 @@ namespace FofuxoAnimationTools.Editor
         /// <summary>
         /// Runs the check and, when the answer is yes, carries out the delete itself.
         ///
-        /// This is the way in that has no Unity delete behind it. The Delete key and
-        /// the Delete menu entry are both caught before Unity acts on them, so there
-        /// is no operation to refuse and nothing for Unity to report as failed -- the
-        /// error dialog it shows when a delete is stopped never comes up, because no
-        /// delete was ever started.
+        /// This is the way in that has no Unity delete behind it. The Delete key is
+        /// caught before Unity acts on it, so there is no operation to refuse and
+        /// nothing for Unity to report as failed -- the error dialog it shows when
+        /// a delete is stopped never comes up, because no delete was ever started.
         ///
-        /// A delete from a script or another tool still arrives through
-        /// OnWillDeleteAsset, where stopping it is the only option and Unity says so
-        /// in its own words.
+        /// A delete from a menu entry, a script or another tool still arrives
+        /// through OnWillDeleteAsset, where stopping it is the only option and
+        /// Unity says so in its own words.
         /// </summary>
         public static void RequestDelete(List<string> paths)
         {

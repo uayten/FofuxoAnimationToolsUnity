@@ -41,6 +41,7 @@ namespace FofuxoAnimationTools.Editor
         {
             DrawScenePreviewBlock();
             DrawRootMotionBlock();
+            DrawBakePoseBlock();
 
             EditorGUILayout.Space();
 
@@ -207,6 +208,121 @@ namespace FofuxoAnimationTools.Editor
                         MessageType.None);
                 }
             }
+        }
+
+        /// <summary>
+        /// Adds a Bake Into Pose toggle for Generic standalone clips. Unity's own
+        /// bake settings only exist for Humanoid clips, so this freezes the root
+        /// bone's planar travel at its first value -- the animation plays in place
+        /// while bob and facing stay in the pose. Originals are kept inside the
+        /// clip, so switching back restores the travel exactly.
+        /// </summary>
+        private void DrawBakePoseBlock()
+        {
+            List<AnimationClip> clips = TargetClips();
+            if (clips.Count == 0 || !AllEditable(clips))
+            {
+                return;
+            }
+
+            using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+            {
+                EditorGUILayout.LabelField("Bake Into Pose", EditorStyles.boldLabel);
+
+                bool enabled = AllBaked(clips);
+                bool mixed = enabled != AnyBaked(clips);
+
+                using (new EditorGUI.DisabledScope(!enabled && !CanBake(clips)))
+                {
+                    EditorGUI.showMixedValue = mixed;
+
+                    using (var check = new EditorGUI.ChangeCheckScope())
+                    {
+                        bool wanted = EditorGUILayout.Toggle(
+                            new GUIContent(
+                                "Bake Into Pose",
+                                "On: '" + rootBone + "' stays at its first XZ position, so the " +
+                                "clip plays in place. Y bob and rotation are kept.\n" +
+                                "Off: the original travel is restored exactly."),
+                            enabled);
+
+                        if (check.changed)
+                        {
+                            ApplyBake(clips, wanted);
+                        }
+                    }
+
+                    EditorGUI.showMixedValue = false;
+                }
+
+                if (!enabled && !CanBake(clips))
+                {
+                    EditorGUILayout.HelpBox(
+                        $"'{rootBone}' does not travel across the floor in this clip, so there is nothing to bake.",
+                        MessageType.None);
+                }
+            }
+        }
+
+        private void ApplyBake(List<AnimationClip> clips, bool bake)
+        {
+            int changed = 0;
+
+            foreach (AnimationClip clip in clips)
+            {
+                bool done = bake
+                    ? BakePoseClipUtility.Bake(clip, rootBone)
+                    : BakePoseClipUtility.Unbake(clip, rootBone);
+
+                if (done)
+                {
+                    changed++;
+                }
+            }
+
+            if (changed > 0)
+            {
+                AssetDatabase.SaveAssets();
+            }
+        }
+
+        private static bool AllBaked(List<AnimationClip> clips)
+        {
+            foreach (AnimationClip clip in clips)
+            {
+                if (!BakePoseClipUtility.HasBakedPose(clip))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static bool AnyBaked(List<AnimationClip> clips)
+        {
+            foreach (AnimationClip clip in clips)
+            {
+                if (BakePoseClipUtility.HasBakedPose(clip))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private bool CanBake(List<AnimationClip> clips)
+        {
+            foreach (AnimationClip clip in clips)
+            {
+                if (BakePoseClipUtility.HasTravelingRootBone(clip, rootBone))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private void Apply(List<AnimationClip> clips, bool useRootMotion)

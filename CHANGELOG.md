@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A **Bake Into Pose** Inspector toggle for standalone Generic clips, next to the
+  Root Motion block. Baking freezes the root bone's planar travel at its first
+  value so the clip plays in place (Y bob and rotation are kept); the originals
+  are cloned into hidden backup bindings inside the same clip, so switching back
+  restores the travel and RootT curves exactly. Baking also drops RootT, so the
+  Root Motion toggle reads off while baked.
+
 ### Fixed
 
 - Choosing a source during **Update From Source File** now also copies and imports
@@ -14,6 +23,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   animations in the project until another update was requested.
 - An explicitly selected source can have a different filename from the asset.
 - Source updates finish importing before returning and preserve the asset GUID.
+- Removed the `Assets/Delete` menu takeover. Unity 6000.6 rejects a managed item
+  on that path ("a menu item with the same name already exists"), so the takeover
+  only logged a warning on every reload while Unity's own entry kept handling menu
+  deletes behind the guard's back. Menu and right-click deletes now reach the
+  guard through `OnWillDeleteAsset` like script deletes; the Delete key is still
+  caught beforehand, where refusing is never needed.
 
 ### Added
 

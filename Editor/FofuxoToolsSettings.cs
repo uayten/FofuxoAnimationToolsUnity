@@ -84,12 +84,16 @@ namespace FofuxoAnimationTools.Editor
         }
 
         /// <summary>
-        /// Whether to catch a delete before Unity acts on it -- the Delete key in the
-        /// Project window, and the Delete entry on the Assets and right-click menus.
+        /// Whether to catch the Delete key in the Project window before Unity acts
+        /// on it.
         ///
         /// It is the difference between asking and refusing. Caught early there is no
         /// delete to stop, so Unity never reports one as failed and never shows the
-        /// dialog claiming something is keeping a hook on the asset.
+        /// dialog claiming something is keeping a hook on the asset. Menu entries,
+        /// scripts and other tools always go through Unity's own delete -- a managed
+        /// MenuItem can no longer take the Assets/Delete entry over on Unity 6000.6,
+        /// so those reach the guard through OnWillDeleteAsset, where refusing one
+        /// costs Unity's own dialog first.
         /// </summary>
         public static bool InterceptDelete
         {
@@ -211,13 +215,13 @@ namespace FofuxoAnimationTools.Editor
                     new GUIContent(
                         "Catch the delete early",
                         "Check before Unity starts deleting rather than after: the Delete " +
-                        "key, and the Delete entry on the Assets and right-click menus. " +
-                        "Unity has no way to stop a delete quietly -- refusing one makes it " +
-                        "claim something is keeping a hook on the asset -- so getting in " +
-                        "front of the command is the only way that dialog never appears. " +
-                        "Taking the menu entry means replacing Unity's, so Delete sits at " +
-                        "the end of the first block of the menu whether this is on or off. " +
-                        "Off, both the key and the entry go straight to Unity's own delete."),
+                        "key in the Project window. Unity has no way to stop a delete " +
+                        "quietly -- refusing one makes it claim something is keeping a " +
+                        "hook on the asset -- so getting in front of the keystroke is " +
+                        "the only way that dialog never appears for it. Menu entries " +
+                        "always go through Unity's own delete and reach the guard " +
+                        "afterwards. Off, the key goes straight to Unity's own delete " +
+                        "too."),
                     InterceptDelete);
             }
 

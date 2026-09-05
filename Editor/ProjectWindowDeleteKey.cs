@@ -36,7 +36,10 @@ namespace FofuxoAnimationTools.Editor
     /// borrowing this one for a case it was not written for.
     ///
     /// The other way a person deletes something -- the Delete entry on the Assets and
-    /// right-click menus -- is caught the same distance upstream by AssetDeleteMenu.
+    /// right-click menus -- goes through Unity's own delete and reaches the guard
+    /// through OnWillDeleteAsset, where stopping it costs Unity's own
+    /// could-not-be-deleted dialog first. A managed MenuItem can no longer take
+    /// that entry over: Unity 6000.6 rejects it as already existing.
     /// </summary>
     [InitializeOnLoad]
     internal static class ProjectWindowDeleteKey

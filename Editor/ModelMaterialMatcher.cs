@@ -187,7 +187,7 @@ namespace FofuxoAnimationTools.Editor
             return model;
         }
 
-        private static void Resolve(Slot slot, Dictionary<string, List<Material>> index, string modelPath)
+        public static void Resolve(Slot slot, Dictionary<string, List<Material>> index, string modelPath)
         {
             if (!index.TryGetValue(Normalize(slot.Name), out List<Material> candidates) || candidates.Count == 0)
             {

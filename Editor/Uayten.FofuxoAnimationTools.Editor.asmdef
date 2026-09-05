@@ -2,7 +2,8 @@
     "name": "Uayten.FofuxoAnimationTools.Editor",
     "rootNamespace": "FofuxoAnimationTools.Editor",
     "references": [
-        "Uayten.FofuxoAnimationTools"
+        "Uayten.FofuxoAnimationTools",
+        "Unity.Formats.Fbx.Editor"
     ],
     "includePlatforms": [
         "Editor"

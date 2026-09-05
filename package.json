@@ -4,6 +4,9 @@
   "version": "0.1.0",
   "unity": "6000.0",
   "description": "Editor tools for a pipeline that authors its animations somewhere else and brings them into Unity as standalone .anim assets. Reimport a folder of takes over the clips the project already uses without breaking a reference, be told what breaks before deleting something else depends on, match a new FBX against the materials the project already has, turn bone displacement into root motion, and drop a clip into the Scene view to watch it loop.",
+  "dependencies": {
+    "com.unity.formats.fbx": "5.1.6"
+  },
   "author": {
     "name": "uayten"
   },

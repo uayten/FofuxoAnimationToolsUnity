@@ -7,12 +7,9 @@ namespace FofuxoAnimationTools.Editor
     /// <summary>
     /// The front end for <see cref="ModelExtractUtility"/>.
     ///
-    /// The window exists to argue with the idea before carrying it out. Extracting a
-    /// model works, and for an avatar it is a straightforwardly good trade; for a
-    /// mesh it is usually not, and the reason is a number the user cannot see
-    /// anywhere else. So the estimate sits next to the button, and the comparison
-    /// against the FBX is made before the extraction rather than discovered in the
-    /// next commit.
+    /// Exports a material-free character FBX containing only the renderable hierarchy
+    /// and its rig. The FBX becomes the lightweight model used by scene previews, while
+    /// gameplay prefabs remain separate and never bring their components into a preview.
     /// </summary>
     public sealed class ModelExtractWindow : EditorWindow
     {
@@ -142,29 +139,26 @@ namespace FofuxoAnimationTools.Editor
 
             EditorGUILayout.Space(4);
 
-            options.Meshes = EditorGUILayout.Toggle(
-                new GUIContent("Extract meshes", "Each mesh becomes a standalone .asset."),
-                options.Meshes);
+            EditorGUILayout.HelpBox(
+                "Creates a binary CharacterPreview.fbx with its mesh, skeleton and Avatar. " +
+                "It creates no materials of its own; named slots are remapped to matching " +
+                "project materials. Animation takes, colliders, scripts and other gameplay " +
+                "components are not included.",
+                MessageType.Info);
 
-            using (new EditorGUI.DisabledScope(!options.Meshes))
-            {
-                options.OneFilePerMesh = EditorGUILayout.Toggle(
-                    new GUIContent(
-                        "One file per mesh",
-                        "On: a file each, as they sit in the model. Off: all of them in " +
-                        "one file, the first as the main asset."),
-                    options.OneFilePerMesh);
-            }
-
-            options.Avatar = EditorGUILayout.Toggle(
+            options.MatchMaterials = EditorGUILayout.Toggle(
                 new GUIContent(
-                    "Extract avatar",
-                    "The rig, as its own asset. This is the one that is worth doing on " +
-                    "its own: it is small, and every animation FBX can then point at it " +
-                    "with Copy From Other Avatar instead of at the character file. A model " +
-                    "that has no avatar of its own gets a generic one built from its " +
-                    "hierarchy, and the prefab's Animator is pointed at it."),
-                options.Avatar);
+                    "Match project materials",
+                    "Search the configured material folder by normalized name and write " +
+                    "external material remaps on the generated FBX importer."),
+                options.MatchMaterials);
+
+            options.BindPose = EditorGUILayout.Toggle(
+                new GUIContent(
+                    "Put skeleton in bind pose",
+                    "Animation exports can leave their transforms on an arbitrary frame. " +
+                    "This restores the pose stored by the skinned mesh before exporting."),
+                options.BindPose);
 
             options.Animations = EditorGUILayout.Toggle(
                 new GUIContent(
@@ -176,42 +170,6 @@ namespace FofuxoAnimationTools.Editor
                     "the other window for the other half of the same file."),
                 options.Animations);
 
-            options.Prefab = EditorGUILayout.Toggle(
-                new GUIContent(
-                    "Build a self-contained prefab",
-                    "The bone hierarchy and the renderers, unpacked from the model so " +
-                    "they belong to the prefab. Without this the extracted mesh has no " +
-                    "skeleton to be skinned to and the model file cannot be deleted."),
-                options.Prefab);
-
-            using (new EditorGUI.DisabledScope(!options.Prefab))
-            {
-                options.MatchMaterials = EditorGUILayout.Toggle(
-                    new GUIContent(
-                        "Match materials by name",
-                        "Point the prefab's renderers at the project's own materials, " +
-                        "matched with the naming convention stripped off both sides."),
-                    options.MatchMaterials);
-
-                options.BindPose = EditorGUILayout.Toggle(
-                    new GUIContent(
-                        "Put the skeleton in bind pose",
-                        "The transforms in a model come from the nodes in the FBX, and " +
-                        "an FBX carrying animation has those left wherever the exporter " +
-                        "stopped -- mid-stride, mid-swing. The mesh is unaffected. This " +
-                        "puts the bones back where the mesh was bound to them."),
-                    options.BindPose);
-
-                options.ExtractUnmatchedMaterials = EditorGUILayout.Toggle(
-                    new GUIContent(
-                        "Extract the leftovers",
-                        "Write out the embedded materials that matched nothing. Without " +
-                        "this, a single unmatched slot keeps the whole prefab tied to the " +
-                        "model file — which is usually a default material on a slot that " +
-                        "never got one."),
-                    options.ExtractUnmatchedMaterials);
-            }
-
             EditorGUILayout.Space(4);
         }
 
@@ -222,13 +180,17 @@ namespace FofuxoAnimationTools.Editor
 
             Dictionary<string, List<Material>> index =
                 ModelMaterialMatcher.Index(FofuxoToolsSettings.MaterialSearchFolder);
-
             List<string> models = AnimationClipSyncUtility.ModelsUnder(AssetDatabase.GetAssetPath(source));
 
             try
             {
                 for (int i = 0; i < models.Count; i++)
                 {
+                    if (ModelExtractUtility.IsGeneratedPreview(models[i]))
+                    {
+                        continue;
+                    }
+
                     EditorUtility.DisplayProgressBar("Reading models", models[i], (float)i / models.Count);
                     plans.Add(ModelExtractUtility.Inspect(models[i], index));
                 }
@@ -250,23 +212,14 @@ namespace FofuxoAnimationTools.Editor
                 $"avatar: {(plan.Avatar != null ? plan.Avatar.name : "none")}",
                 EditorStyles.miniLabel);
 
-            // Asking for an avatar the model does not have is a tick box that quietly
-            // does nothing, and the reason is one tab away in the importer.
-            if (options.Avatar && plan.Avatar == null)
-            {
-                EditorGUILayout.HelpBox(
-                    "This model has no avatar, so none will be written. Its Rig tab is set " +
-                    "to Avatar Definition: No Avatar — set that to Create From This Model " +
-                    "and there will be one to extract.",
-                    MessageType.Warning);
-            }
+            EditorGUILayout.LabelField(
+                $"Output: {plan.Name}Preview.fbx (gameplay components excluded)",
+                EditorStyles.miniLabel);
 
-            DrawSize(plan);
-
-            if (plan.Materials.Count > 0)
+            if (options.MatchMaterials && plan.Materials.Count > 0)
             {
                 EditorGUILayout.Space(2);
-                EditorGUILayout.LabelField("Embedded materials", EditorStyles.miniBoldLabel);
+                EditorGUILayout.LabelField("Project material remaps", EditorStyles.miniBoldLabel);
 
                 foreach (ModelMaterialMatcher.Slot slot in plan.Materials)
                 {
@@ -278,45 +231,8 @@ namespace FofuxoAnimationTools.Editor
                     EditorGUILayout.EndHorizontal();
                 }
             }
-            else
-            {
-                EditorGUILayout.LabelField(
-                    "No embedded materials — the model already points at project materials.",
-                    EditorStyles.miniLabel);
-            }
 
             EditorGUILayout.EndVertical();
-        }
-
-        /// <summary>
-        /// The number the decision turns on. A mesh written as YAML is several times
-        /// the FBX it came from, and nowhere in Unity does that get said out loud
-        /// until it is already in the commit.
-        /// </summary>
-        private void DrawSize(ModelExtractUtility.Plan plan)
-        {
-            if (!options.Meshes || plan.Vertices == 0)
-            {
-                return;
-            }
-
-            float estimate = plan.EstimatedBytes / 1048576f;
-            float model = plan.ModelBytes / 1048576f;
-
-            string line = $"Extracted meshes: about {estimate:F1} MB, against {model:F1} MB for the model file.";
-
-            if (plan.EstimatedBytes > plan.ModelBytes * 1.5f)
-            {
-                EditorGUILayout.HelpBox(
-                    line + "\n\nText serialisation is why. The mesh is the same data " +
-                    "written as YAML, and it will land in the repository at that size " +
-                    "and re-land at that size every time it is re-exported.",
-                    MessageType.Warning);
-            }
-            else
-            {
-                EditorGUILayout.LabelField(line, EditorStyles.miniLabel);
-            }
         }
 
         private void DrawFooter()
@@ -357,8 +273,8 @@ namespace FofuxoAnimationTools.Editor
             var written = new List<string>();
             var tethered = new List<string>();
             var withoutAvatar = new List<string>();
-            var builtAvatar = new List<string>();
             int replaced = 0;
+            int matchedMaterials = 0;
 
             foreach (ModelExtractUtility.Plan plan in plans)
             {
@@ -371,23 +287,16 @@ namespace FofuxoAnimationTools.Editor
 
                 written.AddRange(result.Written);
                 replaced += result.Replaced;
+                matchedMaterials += result.MatchedMaterials;
 
-                if (result.PrefabPath != null && !result.SelfContained)
+                if (result.CharacterPath != null && !result.SelfContained)
                 {
                     tethered.Add(plan.Name);
                 }
 
-                // Asked of what was written, not of what the model brought. A model with
-                // Avatar Definition: No Avatar has none to extract, and one gets built
-                // from its hierarchy instead -- reporting that as "no avatar was written"
-                // was telling the user to go fix something that is already handled.
-                if (options.Avatar && result.AvatarPath == null)
+                if (result.AvatarPath == null)
                 {
                     withoutAvatar.Add(plan.Name);
-                }
-                else if (result.AvatarBuilt)
-                {
-                    builtAvatar.Add(plan.Name);
                 }
             }
 
@@ -399,14 +308,11 @@ namespace FofuxoAnimationTools.Editor
             // that matters clicked through.
             Debug.Log(
                 $"Wrote {written.Count} asset(s), {replaced} of them over what was already " +
-                "there, keeping its GUID." +
-                (options.Prefab && tethered.Count == 0
-                    ? " The prefabs no longer reference the model files."
-                    : string.Empty) +
-                (builtAvatar.Count > 0
-                    ? $" {builtAvatar.Count} model(s) had no avatar of their own, so a generic " +
-                      "one was built from the hierarchy and put on the prefab's Animator: " +
-                      string.Join(", ", builtAvatar) + "."
+                $"there, keeping its GUID. Applied {matchedMaterials} project material " +
+                "remap(s). The preview FBX files create no materials of their own and " +
+                "contain no gameplay components." +
+                (tethered.Count == 0
+                    ? " They no longer reference their source models."
                     : string.Empty));
 
             var trouble = new List<string>();
@@ -414,23 +320,15 @@ namespace FofuxoAnimationTools.Editor
             if (withoutAvatar.Count > 0)
             {
                 trouble.Add(
-                    $"No avatar was written for {string.Join(", ", withoutAvatar)}: the model " +
-                    "does not have one. Its Rig tab is set to Avatar Definition: No Avatar, " +
-                    "so there is nothing to extract until that is Create From This Model.");
+                    $"The exported FBX did not produce a valid Avatar for " +
+                    $"{string.Join(", ", withoutAvatar)}. Check the generated model's Rig tab.");
             }
 
-            if (options.Prefab && tethered.Count > 0)
+            if (tethered.Count > 0)
             {
                 trouble.Add(
-                    $"{tethered.Count} prefab(s) still reference the model file and would " +
-                    $"break if it were deleted: {string.Join(", ", tethered)}.");
-            }
-
-            if (!options.Prefab)
-            {
-                trouble.Add(
-                    "No prefab was built, so the model file is still the only thing holding " +
-                    "the skeleton these meshes are skinned to. It cannot be deleted.");
+                    $"{tethered.Count} generated FBX file(s) still reference their source " +
+                    $"model: {string.Join(", ", tethered)}.");
             }
 
             if (trouble.Count > 0)

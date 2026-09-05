@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.IO;
 using UnityEditor;
+using UnityEditor.Formats.Fbx.Exporter;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.SceneManagement;
@@ -9,59 +10,31 @@ using Object = UnityEngine.Object;
 namespace FofuxoAnimationTools.Editor
 {
     /// <summary>
-    /// Takes what a model file contains -- meshes, the avatar, the hierarchy -- and
-    /// writes it out as ordinary Unity assets that no longer need the model file.
+    /// Takes the geometry and rig from a model and writes them into a clean FBX made
+    /// specifically for animation preview and avatar sharing.
     ///
-    /// The mesh and the avatar are copies: Instantiate produces a real, independent
-    /// object, and once it is an asset the FBX has nothing more to say about it. The
-    /// hierarchy is the harder half. A skinned character is not a mesh; it is two
-    /// hundred transforms and a renderer holding an array of references into them, in
-    /// the order the bindposes expect. That survives extraction only as a prefab,
-    /// unpacked from the model so it owns its own copy of the hierarchy rather than
-    /// inheriting one.
-    ///
-    /// Whether that is a good idea is a separate question from whether it works, and
-    /// the honest answer differs per asset. See <see cref="Estimate"/>: with the
-    /// project on text serialisation a mesh written as YAML runs several times the
-    /// size of the FBX it came from, and extracting it also throws away the path by
-    /// which a new export would have reached the project. The window says so; this
-    /// class just does the work.
+    /// The export owns its mesh and skeleton instead of inheriting a gameplay prefab.
+    /// Only transforms and renderers reach the FBX; colliders, scripts, rigidbodies,
+    /// controllers, cameras and lights stay behind. Material slots keep only the names
+    /// needed for importer remaps; Unity creates no materials for the generated model
+    /// and points the slots at matching .mat assets already in the project.
     /// </summary>
     public static class ModelExtractUtility
     {
-        /// <summary>
-        /// Bytes of YAML per vertex, measured on a 38,895-vertex skinned character
-        /// that came out at 7.7 MB. Rough, and enough to tell 300 KB from 8 MB before
-        /// the file is written rather than after.
-        /// </summary>
-        private const long BytesPerVertex = 198;
+        public const string GeneratedPreviewLabel = "FofuxoAnimationPreview";
 
         public sealed class Options
         {
-            public bool Meshes = true;
-            public bool OneFilePerMesh = true;
-            public bool Avatar = true;
-            public bool Prefab = true;
             public bool MatchMaterials = true;
-
-            /// <summary>
-            /// Write out the embedded materials that matched nothing in the project.
-            ///
-            /// Without this, a model gets so far and no further. A character with six
-            /// material slots and four real materials keeps two pointing at defaults
-            /// that live inside the FBX, and those two are enough to tether the whole
-            /// prefab to the file it was supposed to replace.
-            /// </summary>
-            public bool ExtractUnmatchedMaterials = true;
 
             /// <summary>
             /// Put the skeleton back in its bind pose.
             ///
-            /// The transforms in the prefab come from the nodes in the FBX, and an
+            /// The transforms in the source model come from the nodes in its file, and an
             /// FBX carrying animation usually has those left wherever the exporter
             /// stopped evaluating -- mid-stride, mid-swing. The mesh is unaffected,
             /// since its vertices are stored in bind pose regardless, so the result
-            /// is a prefab whose rest pose is one arbitrary frame of one take.
+            /// is an export whose rest pose is one arbitrary frame of one take.
             ///
             /// The bind pose is not lost: it is exactly what the mesh's bindposes
             /// describe, and putting the bones back is arithmetic.
@@ -87,15 +60,10 @@ namespace FofuxoAnimationTools.Editor
             public GameObject Model;
             public Avatar Avatar;
             public readonly List<Mesh> Meshes = new List<Mesh>();
-
-            /// <summary>Materials embedded in the model, and the project match found.</summary>
             public readonly List<ModelMaterialMatcher.Slot> Materials =
                 new List<ModelMaterialMatcher.Slot>();
 
             public int Vertices;
-            public long ModelBytes;
-
-            public long EstimatedBytes => Vertices * BytesPerVertex;
 
             /// <summary>The file's name, which is not necessarily the character's.</summary>
             public string FileName => Path.GetFileNameWithoutExtension(ModelPath);
@@ -106,8 +74,8 @@ namespace FofuxoAnimationTools.Editor
             /// The file name is the wrong answer whenever the character travels inside a
             /// file named after something else — which is every animation export, where
             /// the file is called AS_Attack_Air_to_Floor_01_End_Seq and the character
-            /// inside it is called Fergus. Extracting that produced a prefab and an
-            /// avatar named after one take of animation.
+            /// inside it is called Fergus. Naming the preview after the take would hide
+            /// which character the exported rig belongs to.
             ///
             /// The skin knows better: the mesh a character is skinned to carries the
             /// character's name, put there by whoever built it. The biggest one wins when
@@ -146,14 +114,14 @@ namespace FofuxoAnimationTools.Editor
         public sealed class Result
         {
             public readonly List<string> Written = new List<string>();
-            public string PrefabPath;
+            public string CharacterPath;
 
             /// <summary>How many of the written assets were already there.</summary>
             public int Replaced;
 
             /// <summary>
-            /// Assets the prefab still needs from the model file. Empty means the FBX
-            /// can go; anything in it means deleting the FBX would break the prefab.
+            /// Assets the clean FBX still needs from the source model. This is expected
+            /// to stay empty because geometry and skeleton are physically exported.
             /// </summary>
             public readonly List<string> StillNeeded = new List<string>();
 
@@ -161,27 +129,23 @@ namespace FofuxoAnimationTools.Editor
             public string AvatarPath;
 
             /// <summary>
-            /// True when the avatar was built here rather than taken from the model.
-            /// Worth saying out loud: the model's Rig tab still reads No Avatar, and the
-            /// one that now exists is this package's doing.
+            /// True when the clean FBX importer built an avatar where the source had none.
             /// </summary>
             public bool AvatarBuilt;
+            public int MatchedMaterials;
 
-            public bool SelfContained => PrefabPath != null && StillNeeded.Count == 0;
+            public bool SelfContained => CharacterPath != null && StillNeeded.Count == 0;
         }
 
-        public static Plan Inspect(string modelPath, Dictionary<string, List<Material>> index)
+        public static Plan Inspect(
+            string modelPath,
+            Dictionary<string, List<Material>> materialIndex = null)
         {
             var plan = new Plan
             {
                 ModelPath = modelPath,
                 Model = AssetDatabase.LoadAssetAtPath<GameObject>(modelPath)
             };
-
-            if (File.Exists(modelPath))
-            {
-                plan.ModelBytes = new FileInfo(modelPath).Length;
-            }
 
             foreach (Object member in AssetDatabase.LoadAllAssetsAtPath(modelPath))
             {
@@ -197,19 +161,54 @@ namespace FofuxoAnimationTools.Editor
             }
 
             plan.Meshes.Sort((a, b) => string.CompareOrdinal(a.name, b.name));
-
-            foreach (Material material in EmbeddedMaterials(modelPath))
-            {
-                var slot = new ModelMaterialMatcher.Slot { Name = material.name, Current = material };
-                slot.Suggestion = Best(material.name, index);
-                slot.Note = slot.Suggestion == null
-                    ? "no project material matches this name"
-                    : $"matches {slot.Suggestion.name}";
-
-                plan.Materials.Add(slot);
-            }
+            InspectMaterials(plan, materialIndex ??
+                ModelMaterialMatcher.Index(FofuxoToolsSettings.MaterialSearchFolder));
 
             return plan;
+        }
+
+        /// <summary>
+        /// Records the material names the FBX Exporter will write. The exporter reads
+        /// renderer assignments rather than the source importer's original slot names,
+        /// so these names are also the identifiers the generated importer must remap.
+        /// </summary>
+        private static void InspectMaterials(
+            Plan plan,
+            Dictionary<string, List<Material>> index)
+        {
+            var seen = new HashSet<string>();
+
+            foreach (Renderer renderer in plan.Model.GetComponentsInChildren<Renderer>(true))
+            {
+                foreach (Material material in renderer.sharedMaterials)
+                {
+                    if (material == null || !seen.Add(material.name))
+                    {
+                        continue;
+                    }
+
+                    var slot = new ModelMaterialMatcher.Slot
+                    {
+                        Name = material.name,
+                        Current = material
+                    };
+
+                    string materialPath = AssetDatabase.GetAssetPath(material);
+                    if (materialPath.EndsWith(".mat", System.StringComparison.OrdinalIgnoreCase))
+                    {
+                        slot.Suggestion = material;
+                        slot.Note = "already uses this project material";
+                    }
+                    else
+                    {
+                        ModelMaterialMatcher.Resolve(slot, index, plan.ModelPath);
+                    }
+
+                    plan.Materials.Add(slot);
+                }
+            }
+
+            plan.Materials.Sort((a, b) => string.CompareOrdinal(a.Name, b.Name));
         }
 
         /// <summary>
@@ -244,28 +243,10 @@ namespace FofuxoAnimationTools.Editor
         public static Result Extract(Plan plan, string folder, Options options)
         {
             var result = new Result();
-            var meshes = new Dictionary<Mesh, Mesh>();
 
             try
             {
-                if (options.Meshes)
-                {
-                    ExtractMeshes(plan, folder, options.OneFilePerMesh, meshes, result);
-                }
-
-                Avatar avatar = options.Avatar ? ExtractAvatar(plan, folder, result) : null;
-
-                if (options.ExtractUnmatchedMaterials)
-                {
-                    ExtractMaterials(plan, folder, result);
-                }
-
-                AssetDatabase.SaveAssets();
-
-                if (options.Prefab)
-                {
-                    BuildPrefab(plan, folder, options, meshes, avatar, result);
-                }
+                ExportCharacter(plan, folder, options, result);
 
                 if (options.Animations)
                 {
@@ -329,50 +310,14 @@ namespace FofuxoAnimationTools.Editor
             }
         }
 
-        private static void ExtractMeshes(
-            Plan plan,
-            string folder,
-            bool oneFilePerMesh,
-            Dictionary<Mesh, Mesh> meshes,
-            Result result)
-        {
-            string shared = null;
-
-            for (int i = 0; i < plan.Meshes.Count; i++)
-            {
-                Mesh source = plan.Meshes[i];
-
-                EditorUtility.DisplayProgressBar(
-                    "Extracting meshes", source.name, (float)i / plan.Meshes.Count);
-
-                if (oneFilePerMesh || shared == null)
-                {
-                    string path = $"{folder}/{Sanitise(source.name)}.asset";
-                    meshes[source] = Write(source, path, result);
-
-                    if (!oneFilePerMesh)
-                    {
-                        shared = path;
-                    }
-                }
-                else
-                {
-                    // Everything after the first goes in beside it, which is how a
-                    // model with a dozen pieces stays one file instead of a dozen.
-                    meshes[source] = WriteBeside(source, shared, result);
-                }
-            }
-        }
-
         /// <summary>
         /// Writes an object to a path, replacing what is already there instead of
         /// creating a second file beside it.
         ///
         /// Replacing means copying into the existing asset rather than deleting and
-        /// recreating it. The asset keeps its GUID, so the prefab built by the last
-        /// extraction goes on pointing at the same mesh and the second extraction is
-        /// an update rather than a fork. It is the same reason the clip sync rewrites
-        /// clips in place, for the same gain.
+        /// recreating it. The asset keeps its GUID, so a material remap built by the
+        /// last extraction stays valid and the second extraction is an update rather
+        /// than a fork.
         /// </summary>
         private static T Write<T>(T source, string path, Result result) where T : Object
         {
@@ -402,30 +347,6 @@ namespace FofuxoAnimationTools.Editor
             return copy;
         }
 
-        /// <summary>The same, for an object living inside another asset's file.</summary>
-        private static T WriteBeside<T>(T source, string assetPath, Result result) where T : Object
-        {
-            foreach (Object member in AssetDatabase.LoadAllAssetsAtPath(assetPath))
-            {
-                if (member is T existing &&
-                    existing.name == source.name &&
-                    !AssetDatabase.IsMainAsset(existing))
-                {
-                    Overwrite(source, existing);
-                    result.Replaced++;
-
-                    return existing;
-                }
-            }
-
-            var copy = Object.Instantiate(source);
-            copy.name = source.name;
-            copy.hideFlags = HideFlags.None;
-
-            AssetDatabase.AddObjectToAsset(copy, assetPath);
-            return copy;
-        }
-
         private static void Overwrite(Object source, Object destination)
         {
             string name = destination.name;
@@ -438,28 +359,6 @@ namespace FofuxoAnimationTools.Editor
             destination.hideFlags = HideFlags.None;
 
             EditorUtility.SetDirty(destination);
-        }
-
-        /// <summary>
-        /// Copies out the embedded materials nothing in the project matched, and
-        /// points the plan at the copies so the prefab uses them instead of the ones
-        /// inside the model. This is what Unity's own Extract Materials does, applied
-        /// only to the leftovers.
-        /// </summary>
-        private static void ExtractMaterials(Plan plan, string folder, Result result)
-        {
-            foreach (ModelMaterialMatcher.Slot slot in plan.Materials)
-            {
-                if (slot.Suggestion != null || slot.Current == null)
-                {
-                    continue;
-                }
-
-                slot.Suggestion = Write(
-                    slot.Current, $"{folder}/{Sanitise(slot.Current.name)}.mat", result);
-
-                slot.Note = "extracted, nothing in the project matched it";
-            }
         }
 
         /// <summary>
@@ -518,128 +417,15 @@ namespace FofuxoAnimationTools.Editor
             return changed;
         }
 
-        private static Avatar ExtractAvatar(Plan plan, string folder, Result result)
-        {
-            Avatar avatar = plan.Avatar;
-
-            if (avatar == null)
-            {
-                avatar = BuildAvatar(plan);
-                result.AvatarBuilt = avatar != null;
-            }
-
-            if (avatar == null)
-            {
-                return null;
-            }
-
-            // Named after the character, not after the avatar object the importer made,
-            // which inherits the file name -- and the file is often one animation take.
-            Avatar written = Write(avatar, $"{folder}/{Sanitise(plan.Name)}Avatar.asset", result);
-            result.AvatarPath = AssetDatabase.GetAssetPath(written);
-
-            return written;
-        }
-
         /// <summary>
-        /// Builds a generic Avatar for a model that shipped without one.
-        ///
-        /// Unity's model importer creates the Avatar as part of importing; a scripted
-        /// importer is under no obligation to, and UnityGLTF only does it for humanoid
-        /// rigs. So a glb character arrives with a skeleton and no Avatar, and without
-        /// one there is nothing for an animation file to copy from and no root motion.
-        ///
-        /// The rig is right there in the hierarchy, which is all a generic Avatar is
-        /// made of. The root motion bone is the one this package already asks about in
-        /// Preferences, used only when the model actually has a bone by that name --
-        /// naming one that does not exist produces an invalid Avatar.
+        /// Exports a temporary, stripped instance so the generated FBX can never inherit
+        /// gameplay components from a character prefab. The temporary scene keeps the
+        /// operation away from the user's open scene and is discarded afterwards.
         /// </summary>
-        private static Avatar BuildAvatar(Plan plan)
-        {
-            if (plan.Model == null ||
-                plan.Model.GetComponentInChildren<SkinnedMeshRenderer>(true) == null)
-            {
-                return null;
-            }
-
-            string rootBone = FofuxoToolsSettings.RootBone;
-
-            if (!string.IsNullOrEmpty(rootBone) &&
-                plan.Model.transform.Find(rootBone) == null &&
-                !HasDescendant(plan.Model.transform, rootBone))
-            {
-                rootBone = string.Empty;
-            }
-
-            Avatar built = AvatarBuilder.BuildGenericAvatar(plan.Model, rootBone);
-
-            if (built == null || !built.isValid)
-            {
-                return null;
-            }
-
-            built.name = $"{plan.Name}Avatar";
-            return built;
-        }
-
-        /// <summary>
-        /// Gives the prefab an Animator carrying the avatar.
-        ///
-        /// Without one the avatar is an asset nothing points at, and the prefab cannot
-        /// play a clip -- which makes "extract the character" stop one step short of a
-        /// character. An Animator already on the model is reused rather than doubled.
-        /// </summary>
-        private static void Attach(GameObject prefabRoot, Avatar avatar)
-        {
-            if (prefabRoot == null || avatar == null)
-            {
-                return;
-            }
-
-            // Not ?? -- a missing component comes back as Unity's fake null, which the
-            // null-coalescing operator takes for a real object and hands straight on.
-            Animator animator = prefabRoot.GetComponent<Animator>();
-
-            if (animator == null)
-            {
-                animator = prefabRoot.AddComponent<Animator>();
-            }
-
-            animator.avatar = avatar;
-            animator.applyRootMotion = true;
-        }
-
-        private static bool HasDescendant(Transform parent, string name)
-        {
-            foreach (Transform child in parent.GetComponentsInChildren<Transform>(true))
-            {
-                if (child.name == name)
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        /// <summary>
-        /// The hierarchy, as a prefab that owns it.
-        ///
-        /// Instantiating the model gives a prefab instance whose every transform is
-        /// still inherited from the FBX; unpacking it completely turns those into real
-        /// objects belonging to the new prefab. Only then is rewiring the renderers
-        /// worth anything, because only then is there something to rewire that will
-        /// still be there once the model file is gone.
-        ///
-        /// It happens in a preview scene so that extracting a character does not
-        /// quietly dirty whatever the user had open.
-        /// </summary>
-        private static void BuildPrefab(
+        private static void ExportCharacter(
             Plan plan,
             string folder,
             Options options,
-            Dictionary<Mesh, Mesh> meshes,
-            Avatar avatar,
             Result result)
         {
             if (plan.Model == null)
@@ -649,6 +435,8 @@ namespace FofuxoAnimationTools.Editor
 
             Scene preview = EditorSceneManager.NewPreviewScene();
             GameObject instance = null;
+            string exportedFbx = Path.Combine(
+                Path.GetTempPath(), $"FofuxoCharacter_{System.Guid.NewGuid():N}.fbx");
 
             try
             {
@@ -658,33 +446,63 @@ namespace FofuxoAnimationTools.Editor
                     return;
                 }
 
-                PrefabUtility.UnpackPrefabInstance(
-                    instance, PrefabUnpackMode.Completely, InteractionMode.AutomatedAction);
+                if (PrefabUtility.IsPartOfPrefabInstance(instance))
+                {
+                    PrefabUtility.UnpackPrefabInstance(
+                        instance, PrefabUnpackMode.Completely, InteractionMode.AutomatedAction);
+                }
 
-                // Either switch produces materials the prefab should point at: one
-                // finds them in the project, the other writes them out of the model.
-                Rewire(instance, meshes, avatar, plan,
-                    options.MatchMaterials || options.ExtractUnmatchedMaterials);
+                instance.name = plan.Name;
 
                 if (options.BindPose)
                 {
                     RestoreBindPose(instance);
                 }
 
-                // SaveAsPrefabAsset overwrites whatever is at the path and the file
-                // keeps its GUID, so a second extraction updates the prefab the scene
-                // is already using rather than leaving it behind next to a new one.
-                string path = $"{folder}/{Sanitise(plan.Name)}.prefab";
+                StripUnityComponents(instance);
 
-                if (AssetDatabase.LoadAssetAtPath<GameObject>(path) != null)
+                var exportOptions = new ExportModelOptions
+                {
+                    AnimateSkinnedMesh = false,
+                    EmbedTextures = false,
+                    ExportFormat = ExportFormat.Binary,
+                    ExportUnrendered = true,
+                    KeepInstances = true,
+                    LODExportType = LODExportType.All,
+                    ModelAnimIncludeOption = Include.Model,
+                    ObjectPosition = ObjectPosition.Reset,
+                    PreserveImportSettings = false,
+                    UseMayaCompatibleNames = false
+                };
+
+                if (ModelExporter.ExportObject(exportedFbx, instance, exportOptions) == null)
+                {
+                    throw new IOException($"FBX Exporter could not write '{plan.Name}'.");
+                }
+
+                string path = OutputPath(plan, folder);
+                string absolutePath = AbsoluteProjectPath(path);
+                bool replacing = File.Exists(absolutePath);
+
+                File.Copy(exportedFbx, absolutePath, true);
+                AssetDatabase.ImportAsset(
+                    path,
+                    ImportAssetOptions.ForceSynchronousImport | ImportAssetOptions.ForceUpdate);
+
+                Avatar avatar = ConfigureImporter(plan, path, options.MatchMaterials, result);
+                MarkGeneratedPreview(path);
+
+                result.CharacterPath = path;
+                result.AvatarPath = avatar == null ? null : path;
+                result.AvatarBuilt = plan.Avatar == null && avatar != null;
+                result.Written.Add(path);
+
+                if (replacing)
                 {
                     result.Replaced++;
                 }
 
-                PrefabUtility.SaveAsPrefabAsset(instance, path);
-
-                result.PrefabPath = path;
-                result.Written.Add(path);
+                VerifySourceIndependence(plan.ModelPath, result);
             }
             finally
             {
@@ -694,65 +512,137 @@ namespace FofuxoAnimationTools.Editor
                 }
 
                 EditorSceneManager.ClosePreviewScene(preview);
+                DeleteTemporaryFile(exportedFbx);
             }
-
-            Verify(plan.ModelPath, result);
         }
 
-        private static void Rewire(
-            GameObject root,
-            Dictionary<Mesh, Mesh> meshes,
-            Avatar avatar,
-            Plan plan,
-            bool matchMaterials)
+        private static void StripUnityComponents(GameObject root)
         {
-            foreach (SkinnedMeshRenderer renderer in root.GetComponentsInChildren<SkinnedMeshRenderer>(true))
+            foreach (Component component in root.GetComponentsInChildren<Component>(true))
             {
-                if (renderer.sharedMesh != null &&
-                    meshes.TryGetValue(renderer.sharedMesh, out Mesh replacement))
+                if (component is Transform ||
+                    component is MeshFilter ||
+                    component is MeshRenderer ||
+                    component is SkinnedMeshRenderer)
                 {
-                    renderer.sharedMesh = replacement;
+                    continue;
                 }
 
-                if (matchMaterials)
-                {
-                    renderer.sharedMaterials = Matched(renderer.sharedMaterials, plan);
-                }
+                Object.DestroyImmediate(component);
+            }
+        }
+
+        private static Avatar ConfigureImporter(
+            Plan plan,
+            string path,
+            bool matchMaterials,
+            Result result)
+        {
+            var importer = AssetImporter.GetAtPath(path) as ModelImporter;
+            if (importer == null)
+            {
+                return null;
             }
 
-            foreach (MeshFilter filter in root.GetComponentsInChildren<MeshFilter>(true))
+            ModelImporter sourceImporter = ModelAsset.Importer(plan.ModelPath);
+            bool humanoid = plan.Avatar != null && plan.Avatar.isHuman;
+
+            if (sourceImporter != null && sourceImporter.animationType == ModelImporterAnimationType.Human)
             {
-                if (filter.sharedMesh != null &&
-                    meshes.TryGetValue(filter.sharedMesh, out Mesh replacement))
-                {
-                    filter.sharedMesh = replacement;
-                }
+                humanoid = true;
             }
+
+            importer.importAnimation = false;
+            // External remaps are only resolved when the importer evaluates the FBX's
+            // material descriptions. None keeps the map serialised but leaves the
+            // renderers on Unity's grey default material.
+            importer.materialImportMode =
+                ModelImporterMaterialImportMode.ImportViaMaterialDescription;
+            importer.animationType = humanoid
+                ? ModelImporterAnimationType.Human
+                : ModelImporterAnimationType.Generic;
+            importer.avatarSetup = ModelImporterAvatarSetup.CreateFromThisModel;
 
             if (matchMaterials)
             {
-                foreach (MeshRenderer renderer in root.GetComponentsInChildren<MeshRenderer>(true))
+                foreach (ModelMaterialMatcher.Slot slot in plan.Materials)
                 {
-                    renderer.sharedMaterials = Matched(renderer.sharedMaterials, plan);
+                    if (slot.Suggestion == null)
+                    {
+                        continue;
+                    }
+
+                    importer.AddRemap(
+                        new AssetImporter.SourceAssetIdentifier(typeof(Material), slot.Name),
+                        slot.Suggestion);
+                    result.MatchedMaterials++;
                 }
             }
 
-            if (avatar != null)
+            if (humanoid &&
+                sourceImporter != null &&
+                sourceImporter.animationType == ModelImporterAnimationType.Human)
             {
-                Animator[] animators = root.GetComponentsInChildren<Animator>(true);
+                importer.humanDescription = sourceImporter.humanDescription;
+            }
 
-                foreach (Animator animator in animators)
-                {
-                    animator.avatar = avatar;
-                }
+            importer.SaveAndReimport();
 
-                // A model imported with Avatar Definition: No Avatar arrives with no
-                // Animator at all, so there was nothing for the avatar to be handed to
-                // and the prefab came out unable to play a clip. Give it one.
-                if (animators.Length == 0)
+            foreach (Object member in AssetDatabase.LoadAllAssetsAtPath(path))
+            {
+                if (member is Avatar avatar)
                 {
-                    Attach(root, avatar);
+                    return avatar;
                 }
+            }
+
+            return null;
+        }
+
+        private static string OutputPath(Plan plan, string folder)
+        {
+            string wanted = $"{folder}/{Sanitise(plan.Name)}Preview.fbx";
+            Object occupant = AssetDatabase.LoadMainAssetAtPath(wanted);
+
+            return occupant == null || IsGeneratedPreview(wanted)
+                ? wanted
+                : AssetDatabase.GenerateUniqueAssetPath(wanted);
+        }
+
+        private static string AbsoluteProjectPath(string assetPath)
+        {
+            string project = Directory.GetParent(Application.dataPath).FullName;
+            return Path.GetFullPath(Path.Combine(project, assetPath));
+        }
+
+        private static void MarkGeneratedPreview(string path)
+        {
+            Object asset = AssetDatabase.LoadMainAssetAtPath(path);
+            if (asset == null)
+            {
+                return;
+            }
+
+            var labels = new List<string>(AssetDatabase.GetLabels(asset));
+            if (!labels.Contains(GeneratedPreviewLabel))
+            {
+                labels.Add(GeneratedPreviewLabel);
+                AssetDatabase.SetLabels(asset, labels.ToArray());
+            }
+        }
+
+        public static bool IsGeneratedPreview(string path)
+        {
+            Object asset = AssetDatabase.LoadMainAssetAtPath(path);
+            return asset != null &&
+                   System.Array.IndexOf(AssetDatabase.GetLabels(asset), GeneratedPreviewLabel) >= 0;
+        }
+
+        private static void DeleteTemporaryFile(string path)
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
             }
         }
 
@@ -831,47 +721,18 @@ namespace FofuxoAnimationTools.Editor
             return depth;
         }
 
-        private static Material[] Matched(Material[] materials, Plan plan)
-        {
-            var result = new Material[materials.Length];
-
-            for (int i = 0; i < materials.Length; i++)
-            {
-                result[i] = materials[i];
-
-                if (materials[i] == null)
-                {
-                    continue;
-                }
-
-                foreach (ModelMaterialMatcher.Slot slot in plan.Materials)
-                {
-                    if (slot.Current == materials[i] && slot.Suggestion != null)
-                    {
-                        result[i] = slot.Suggestion;
-                        break;
-                    }
-                }
-            }
-
-            return result;
-        }
-
         /// <summary>
-        /// Whether the prefab still needs the model file. This is the only answer that
-        /// decides whether the FBX can actually be deleted, and it is worth asking the
-        /// asset database rather than assuming the rewiring caught everything.
+        /// Confirms that Unity did not retain a dependency on the source after importing
+        /// the generated FBX. The geometry and skeleton should now live in the file.
         /// </summary>
-        private static void Verify(string modelPath, Result result)
+        private static void VerifySourceIndependence(string modelPath, Result result)
         {
-            if (result.PrefabPath == null)
+            if (result.CharacterPath == null)
             {
                 return;
             }
 
-            AssetDatabase.ImportAsset(result.PrefabPath, ImportAssetOptions.ForceUpdate);
-
-            foreach (string dependency in AssetDatabase.GetDependencies(result.PrefabPath, true))
+            foreach (string dependency in AssetDatabase.GetDependencies(result.CharacterPath, true))
             {
                 if (dependency == modelPath)
                 {

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Extract Mesh and Avatar now creates a clean character FBX instead of a prefab.**
+  The generated `CharacterPreview.fbx` contains the mesh, skeleton and importer-built
+  Avatar, but no animation takes, colliders, scripts, rigidbodies or other gameplay
+  components. It creates no material assets: named slots are matched to the project's
+  existing `.mat` files and stored as importer remaps. Material Creation Mode is set
+  to Import via MaterialDescription so Unity actually resolves those external remaps.
+  Generated preview FBXs are labelled and take priority over nearby gameplay prefabs
+  when a standalone clip is spawned in the Scene view.
+
 ### Added
 
 - A **Bake Into Pose** Inspector toggle for standalone Generic clips, next to the

@@ -29,6 +29,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Bake backups no longer trip `Cannot bind generic curve on Transform` on every
+  import. Backup slots used to share one dummy path with made-up property names,
+  which the importer rejects on Transform; each slot now rides its own dummy
+  path as a plain `m_LocalPosition.x` curve that never plays. Bake, Unbake and
+  the baked-state check read the old form for backward compatibility, and a new
+  **Repair Bake Backup Bindings** menu migrates existing clips in place.
 - Choosing a source during **Update From Source File** now also copies and imports
   it in that action. Previously the picker only saved the link, leaving the old
   animations in the project until another update was requested.

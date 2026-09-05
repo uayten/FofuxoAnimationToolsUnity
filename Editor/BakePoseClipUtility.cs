@@ -18,6 +18,11 @@ namespace FofuxoAnimationTools.Editor
     /// into hidden backup bindings inside the same clip, so there is no sidecar
     /// file to lose, move or clean up. Unbaking writes the backups back and drops
     /// them.
+    ///
+    /// Each backup slot rides on its own dummy path as a plain
+    /// <c>m_LocalPosition.x</c> curve. The path never resolves to a bone, so the
+    /// curve never plays, and the binding stays valid: the importer rejects any
+    /// other float property on Transform with "Cannot bind generic curve".
     /// </summary>
     public static class BakePoseClipUtility
     {
@@ -66,14 +71,25 @@ namespace FofuxoAnimationTools.Editor
 
             foreach (string slot in BackupSlots)
             {
-                AnimationCurve curve = AnimationUtility.GetEditorCurve(clip, BackupBinding(slot));
-                if (curve != null && curve.length > 0)
+                if (HasBackupCurve(clip, slot))
                 {
                     return true;
                 }
             }
 
             return false;
+        }
+
+        private static bool HasBackupCurve(AnimationClip clip, string slot)
+        {
+            AnimationCurve curve = AnimationUtility.GetEditorCurve(clip, BackupBinding(slot));
+            if (curve != null && curve.length > 0)
+            {
+                return true;
+            }
+
+            AnimationCurve legacy = AnimationUtility.GetEditorCurve(clip, LegacyBackupBinding(slot));
+            return legacy != null && legacy.length > 0;
         }
 
         /// <summary>
@@ -182,7 +198,7 @@ namespace FofuxoAnimationTools.Editor
 
             for (int i = 0; i < BackedUpBonePosition.Length; i++)
             {
-                AnimationCurve backup = AnimationUtility.GetEditorCurve(clip, BackupBinding(BackupSlots[i]));
+                AnimationCurve backup = ReadBackupCurve(clip, BackupSlots[i]);
                 if (backup == null || backup.length == 0)
                 {
                     continue;
@@ -190,19 +206,19 @@ namespace FofuxoAnimationTools.Editor
 
                 AnimationUtility.SetEditorCurve(
                     clip, BoneBinding(rootBone, BackedUpBonePosition[i]), Clone(backup));
-                AnimationUtility.SetEditorCurve(clip, BackupBinding(BackupSlots[i]), null);
+                DropBackupCurves(clip, BackupSlots[i]);
             }
 
             for (int i = 0; i < RootTranslation.Length; i++)
             {
-                AnimationCurve backup = AnimationUtility.GetEditorCurve(clip, BackupBinding(BackupSlots[3 + i]));
+                AnimationCurve backup = ReadBackupCurve(clip, BackupSlots[3 + i]);
                 if (backup == null || backup.length == 0)
                 {
                     continue;
                 }
 
                 AnimationUtility.SetEditorCurve(clip, RootBinding(i), Clone(backup));
-                AnimationUtility.SetEditorCurve(clip, BackupBinding(BackupSlots[3 + i]), null);
+                DropBackupCurves(clip, BackupSlots[3 + i]);
             }
 
             EditorUtility.SetDirty(clip);
@@ -270,7 +286,139 @@ namespace FofuxoAnimationTools.Editor
 
         private static EditorCurveBinding BackupBinding(string slot)
         {
+            return EditorCurveBinding.FloatCurve(
+                $"{BackupPath}/{slot}", typeof(Transform), "m_LocalPosition.x");
+        }
+
+        /// <summary>
+        /// Pre-fix form: every slot shared one path with a made-up property
+        /// name, which the importer rejects on Transform. Read for backward
+        /// compatibility, never written.
+        /// </summary>
+        private static EditorCurveBinding LegacyBackupBinding(string slot)
+        {
             return EditorCurveBinding.FloatCurve(BackupPath, typeof(Transform), slot);
+        }
+
+        private static AnimationCurve ReadBackupCurve(AnimationClip clip, string slot)
+        {
+            AnimationCurve curve = AnimationUtility.GetEditorCurve(clip, BackupBinding(slot));
+            if (curve != null && curve.length > 0)
+            {
+                return curve;
+            }
+
+            return AnimationUtility.GetEditorCurve(clip, LegacyBackupBinding(slot));
+        }
+
+        private static void DropBackupCurves(AnimationClip clip, string slot)
+        {
+            AnimationUtility.SetEditorCurve(clip, BackupBinding(slot), null);
+            AnimationUtility.SetEditorCurve(clip, LegacyBackupBinding(slot), null);
+        }
+
+        /// <summary>
+        /// Moves legacy backup bindings to the current form, preserving the
+        /// baked state and its data. New bakes already write the current form.
+        /// </summary>
+        /// <returns>True when the clip changed.</returns>
+        public static bool RepairBackupBindings(AnimationClip clip)
+        {
+            if (!IsEditable(clip))
+            {
+                return false;
+            }
+
+            bool changed = false;
+            foreach (string slot in BackupSlots)
+            {
+                EditorCurveBinding current = BackupBinding(slot);
+                AnimationCurve currentCurve = AnimationUtility.GetEditorCurve(clip, current);
+                bool hasCurrent = currentCurve != null && currentCurve.length > 0;
+
+                EditorCurveBinding legacy = LegacyBackupBinding(slot);
+                AnimationCurve legacyCurve = AnimationUtility.GetEditorCurve(clip, legacy);
+                bool hasLegacy = legacyCurve != null;
+
+                if (!hasCurrent && hasLegacy && legacyCurve.length > 0)
+                {
+                    AnimationUtility.SetEditorCurve(clip, current, Clone(legacyCurve));
+                    changed = true;
+                }
+
+                if (hasLegacy)
+                {
+                    AnimationUtility.SetEditorCurve(clip, legacy, null);
+                    changed = true;
+                }
+            }
+
+            if (changed)
+            {
+                EditorUtility.SetDirty(clip);
+            }
+
+            return changed;
+        }
+
+        /// <summary>
+        /// Repairs every standalone animation clip in the project. Logs progress
+        /// because large libraries take a while.
+        /// </summary>
+        /// <returns>How many clips changed.</returns>
+        public static int RepairAllBackupBindings()
+        {
+            int scanned = 0;
+            int repaired = 0;
+            foreach (string guid in AssetDatabase.FindAssets("t:AnimationClip"))
+            {
+                string path = AssetDatabase.GUIDToAssetPath(guid);
+                AnimationClip clip = AssetDatabase.LoadAssetAtPath<AnimationClip>(path);
+                scanned++;
+                if (clip != null && RepairBackupBindings(clip))
+                {
+                    repaired++;
+                }
+
+                if (scanned % 200 == 0)
+                {
+                    Debug.Log($"BAKEREPAIR progress scanned={scanned} repaired={repaired}");
+                }
+            }
+
+            if (repaired > 0)
+            {
+                AssetDatabase.SaveAssets();
+            }
+
+            Debug.Log($"BAKEREPAIR-DONE scanned={scanned} repaired={repaired}");
+            return repaired;
+        }
+
+        [MenuItem("Assets/Fofuxo's Animation Tools/Repair Bake Backup Bindings", false, 33)]
+        private static void RepairSelectedBackupBindings()
+        {
+            int repaired = 0;
+            foreach (AnimationClip clip in Selection.GetFiltered<AnimationClip>(SelectionMode.Assets))
+            {
+                if (RepairBackupBindings(clip))
+                {
+                    repaired++;
+                }
+            }
+
+            if (repaired > 0)
+            {
+                AssetDatabase.SaveAssets();
+            }
+
+            Debug.Log($"BAKEREPAIR-DONE selected repaired={repaired}");
+        }
+
+        [MenuItem("Assets/Fofuxo's Animation Tools/Repair Bake Backup Bindings", true)]
+        private static bool ValidateRepairSelectedBackupBindings()
+        {
+            return Selection.GetFiltered<AnimationClip>(SelectionMode.Assets).Length > 0;
         }
     }
 }
